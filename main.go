@@ -25,6 +25,17 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 }
+type apiChirpResp struct {
+	Id        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+type apiChirp struct {
+	Body   string    `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
+}
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,18 +71,35 @@ func handlerHeathz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
+func (cfg *apiConfig) GetChirps(w http.ResponseWriter, r *http.Request) {
+	dbChirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		log.Printf("Error getting chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	apiChirps := make([]apiChirpResp, len(dbChirps))
+	for idx, v := range dbChirps {
+		apiChirps[idx] = apiChirpResp{
+			Id:        v.ID,
+			CreatedAt: v.CreatedAt,
+			UpdatedAt: v.UpdatedAt,
+			Body:      v.Body,
+			UserID:    v.UserID,
+		}
+	}
+	resp, err := json.Marshal(apiChirps)
+	if err != nil {
+		log.Printf("Error marshalling chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(resp)
+
+}
+
 func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
-	type apiChirpResp struct {
-		Id        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Body      string    `json:"body"`
-		UserID    uuid.UUID `json:"user_id"`
-	}
-	type apiChirp struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
-	}
 
 	decoder := json.NewDecoder(r.Body)
 	c := apiChirp{}
@@ -180,6 +208,8 @@ func main() {
 	m.HandleFunc("GET /admin/metrics", c.countHits)
 	m.HandleFunc("POST /admin/reset", c.resetHits)
 	m.HandleFunc("POST /api/chirps", c.Chirp)
+	m.HandleFunc("GET /api/chirps", c.GetChirps)
+	m.HandleFunc("GET /api/chirps/{chirpID}", c.GetChirp)
 	m.HandleFunc("POST /api/users", c.createUser)
 	s := http.Server{Handler: m, Addr: ":8080"}
 
