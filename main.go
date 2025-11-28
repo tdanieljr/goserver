@@ -1,19 +1,26 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 
+	"github.com/joho/godotenv"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
+
+	_ "github.com/lib/pq"
+	"github.com/tdanieljr/goserver/internal/database"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries      *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -82,7 +89,14 @@ func validateChirp(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	c := apiConfig{fileserverHits: atomic.Int32{}}
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		panic(err)
+	}
+	dbQueries := database.New(db)
+	c := apiConfig{fileserverHits: atomic.Int32{}, dbQueries: dbQueries}
 	m := http.NewServeMux()
 
 	m.Handle("/app/", c.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
