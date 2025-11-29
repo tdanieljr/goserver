@@ -10,15 +10,37 @@ import (
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (id, created_at, updated_at, email)
+INSERT INTO users (id, created_at, updated_at, email, hash_password)
 VALUES (
-    gen_random_uuid(),Now(),Now(), $1
+    gen_random_uuid(),Now(),Now(), $1, $2
 )
 RETURNING id, created_at, updated_at, email, hash_password
 `
 
-func (q *Queries) CreateUser(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRowContext(ctx, createUser, email)
+type CreateUserParams struct {
+	Email        string
+	HashPassword string
+}
+
+func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, createUser, arg.Email, arg.HashPassword)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+		&i.HashPassword,
+	)
+	return i, err
+}
+
+const getUserWithEmail = `-- name: GetUserWithEmail :one
+SELECT id, created_at, updated_at, email, hash_password FROM users where email = $1
+`
+
+func (q *Queries) GetUserWithEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserWithEmail, email)
 	var i User
 	err := row.Scan(
 		&i.ID,

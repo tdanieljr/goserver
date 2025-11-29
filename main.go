@@ -17,6 +17,7 @@ import (
 	"golang.org/x/text/language"
 
 	_ "github.com/lib/pq"
+	"github.com/tdanieljr/goserver/internal/auth"
 	"github.com/tdanieljr/goserver/internal/database"
 )
 
@@ -35,6 +36,16 @@ type apiChirpResp struct {
 type apiChirp struct {
 	Body   string    `json:"body"`
 	UserID uuid.UUID `json:"user_id"`
+}
+type parameters struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -178,15 +189,6 @@ func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Email string `json:"email"`
-	}
-	type User struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-	}
 
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -196,8 +198,14 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
+	hashpassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		log.Printf("error with password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
 
-	user, err := cfg.db.CreateUser(r.Context(), params.Email)
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{Email: params.Email, HashPassword: hashpassword})
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
 		w.WriteHeader(500)
@@ -218,6 +226,51 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(201)
 	w.Write(dat)
+
+}
+func (cfg *apiConfig) Login(w http.ResponseWriter, r *http.Request) {
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		log.Printf("Error decoding user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	dbUser, err := cfg.db.GetUserWithEmail(r.Context(), params.Email)
+	if err != nil {
+		log.Printf("error finding user %s", err)
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+	match, err := auth.CheckPasswordHash(params.Password, dbUser.HashPassword)
+	if err != nil {
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+
+	if !match {
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+	apiUser := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+	resp, err := json.Marshal(apiUser)
+	if err != nil {
+		log.Printf("error marshalling response %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(resp)
 
 }
 
@@ -242,6 +295,7 @@ func main() {
 	m.HandleFunc("GET /api/chirps", c.GetChirps)
 	m.HandleFunc("GET /api/chirps/{chirpID}", c.GetChirp)
 	m.HandleFunc("POST /api/users", c.createUser)
+	m.HandleFunc("POST /api/login", c.Login)
 	s := http.Server{Handler: m, Addr: ":8080"}
 
 	s.ListenAndServe()
