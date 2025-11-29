@@ -11,4 +11,6 @@ SELECT * FROM chirps ORDER BY created_at;
 SELECT * FROM chirps WHERE id = $1;
 -- name: DeleteChirp :exec
 DELETE FROM chirps WHERE id = $1;
+-- name: GetChirpsByAuthor :many
+SELECT * FROM chirps where user_id = $1 ORDER BY created_at;
 

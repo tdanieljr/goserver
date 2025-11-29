@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -74,11 +75,38 @@ func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (cfg *apiConfig) GetChirps(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.db.GetChirps(r.Context())
-	if err != nil {
-		log.Printf("Error getting chirps: %s", err)
-		w.WriteHeader(500)
-		return
+	var dbChirps []database.Chirp
+	var err error
+	params := r.URL.Query()
+	author := params.Get("author_id")
+	if author != "" {
+		authorId, err := uuid.Parse(author)
+		if err != nil {
+			log.Printf("Error parsing author_id: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		dbChirps, err = cfg.db.GetChirpsByAuthor(r.Context(), authorId)
+		if err != nil {
+			log.Printf("Error getting chirps: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+	} else {
+		dbChirps, err = cfg.db.GetChirps(r.Context())
+		if err != nil {
+			log.Printf("Error getting chirps: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+	}
+	s := params.Get("sort")
+	switch s {
+	case "", "asc":
+		slices.SortFunc(dbChirps, func(a, b database.Chirp) int { return int(a.CreatedAt.Sub(b.CreatedAt)) })
+	case "desc":
+		slices.SortFunc(dbChirps, func(a, b database.Chirp) int { return int(b.CreatedAt.Sub(a.CreatedAt)) })
 	}
 	apiChirps := make([]apiChirpResp, len(dbChirps))
 	for idx, v := range dbChirps {
