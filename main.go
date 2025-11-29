@@ -98,6 +98,37 @@ func (cfg *apiConfig) GetChirps(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 
 }
+func (cfg *apiConfig) GetChirp(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		log.Printf("Error parsing chirp id:%s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), id)
+	if err != nil {
+		log.Printf("Error getting chirp: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+	chirp := apiChirpResp{
+		Id:        dbChirp.ID,
+		CreatedAt: dbChirp.CreatedAt,
+		UpdatedAt: dbChirp.UpdatedAt,
+		Body:      dbChirp.Body,
+		UserID:    dbChirp.UserID,
+	}
+	resp, err := json.Marshal(chirp)
+	if err != nil {
+		log.Printf("Error marshalling chirp: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(resp)
+
+}
 
 func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
 
