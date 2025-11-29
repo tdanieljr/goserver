@@ -25,6 +25,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	secret         string
 }
 type apiChirpResp struct {
 	Id        uuid.UUID `json:"id"`
@@ -34,18 +35,20 @@ type apiChirpResp struct {
 	UserID    uuid.UUID `json:"user_id"`
 }
 type apiChirp struct {
-	Body   string    `json:"body"`
-	UserID uuid.UUID `json:"user_id"`
+	Body string `json:"body"`
+	//UserID uuid.UUID `json:"user_id"`
 }
 type parameters struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -140,6 +143,59 @@ func (cfg *apiConfig) GetChirp(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 
 }
+func (cfg *apiConfig) Refresh(w http.ResponseWriter, r *http.Request) {
+	rt, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Auth token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	user, err := cfg.db.GetUserFromToken(r.Context(), rt)
+	if err != nil {
+		log.Printf("Error getting user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	if user.RevokedAt.Valid {
+		log.Printf("Revoked Token")
+		w.WriteHeader(401)
+		return
+	}
+	t, err := auth.MakeJWT(user.UserID, cfg.secret)
+	if err != nil {
+		log.Printf("Error making new token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	type tokenResponse struct {
+		T string `json:"token"`
+	}
+	resp := tokenResponse{T: t}
+
+	dat, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("Error marshalling response: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(dat)
+}
+func (cfg *apiConfig) Revoke(w http.ResponseWriter, r *http.Request) {
+	rt, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Auth token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	err = cfg.db.RevokeToken(r.Context(), rt)
+	if err != nil {
+		log.Printf("Error revoking token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(204)
+}
 
 func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
 
@@ -151,6 +207,19 @@ func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
+	t, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Auth token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	tokenID, err := auth.ValidateJWT(t, cfg.secret)
+	if err != nil {
+		log.Printf("Error validating Auth token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
 	bad_words := []string{"kerfuffle", "sharbert", "fornax"}
 	if len(c.Body) <= 140 {
 		for _, v := range bad_words {
@@ -158,7 +227,7 @@ func (cfg *apiConfig) Chirp(w http.ResponseWriter, r *http.Request) {
 			c.Body = strings.ReplaceAll(c.Body, cases.Title(language.Und).String(v), "****")
 		}
 
-		tmp := database.CreateChirpParams{Body: c.Body, UserID: c.UserID}
+		tmp := database.CreateChirpParams{Body: c.Body, UserID: tokenID}
 		chirp, err := cfg.db.CreateChirp(r.Context(), tmp)
 		if err != nil {
 			log.Printf("Error creating chirp: %s", err)
@@ -245,6 +314,20 @@ func (cfg *apiConfig) Login(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Incorrect email or password"))
 		return
 	}
+	t, err := auth.MakeJWT(dbUser.ID, cfg.secret)
+	if err != nil {
+		log.Printf("error Making jwt token %s", err)
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
+	rt, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("error making refresh token %s", err)
+		w.WriteHeader(401)
+		w.Write([]byte("Incorrect email or password"))
+		return
+	}
 	match, err := auth.CheckPasswordHash(params.Password, dbUser.HashPassword)
 	if err != nil {
 		w.WriteHeader(401)
@@ -257,11 +340,19 @@ func (cfg *apiConfig) Login(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Incorrect email or password"))
 		return
 	}
+	tokenParams := database.InsertTokenParams{
+		Token:     rt,
+		UserID:    dbUser.ID,
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+	}
+	cfg.db.InsertToken(r.Context(), tokenParams)
 	apiUser := User{
-		ID:        dbUser.ID,
-		CreatedAt: dbUser.CreatedAt,
-		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
+		ID:           dbUser.ID,
+		CreatedAt:    dbUser.CreatedAt,
+		UpdatedAt:    dbUser.UpdatedAt,
+		Email:        dbUser.Email,
+		Token:        t,
+		RefreshToken: rt,
 	}
 	resp, err := json.Marshal(apiUser)
 	if err != nil {
@@ -273,17 +364,114 @@ func (cfg *apiConfig) Login(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 
 }
+func (cfg *apiConfig) UpdateEmail(w http.ResponseWriter, r *http.Request) {
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Auth header: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	userID, err := auth.ValidateJWT(authToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error getting validating token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	type emailUpdate struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	dat := emailUpdate{}
+	decoder := json.NewDecoder(r.Body)
+	err = decoder.Decode(&dat)
+	if err != nil {
+		log.Printf("Error decoding json: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	hashPassword, err := auth.HashPassword(dat.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	userUpdate := database.UpdateUserEmailParams{
+		ID:           userID,
+		Email:        dat.Email,
+		HashPassword: hashPassword,
+	}
+	err = cfg.db.UpdateUserEmail(r.Context(), userUpdate)
+	if err != nil {
+		log.Printf("Error updating email: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	dbUser, err := cfg.db.GetUserWithEmail(r.Context(), dat.Email)
+	apiUser := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+	resp, err := json.Marshal(apiUser)
+	if err != nil {
+		log.Printf("Error marshalling json: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(resp)
+
+}
+func (cfg *apiConfig) DeletChirp(w http.ResponseWriter, r *http.Request) {
+	authToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting Auth header: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+	userID, err := auth.ValidateJWT(authToken, cfg.secret)
+	if err != nil {
+		log.Printf("Error getting validating token: %s", err)
+		w.WriteHeader(403)
+		return
+	}
+	id, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		log.Printf("Error parsing chirp id:%s", err)
+		w.WriteHeader(403)
+		return
+	}
+
+	dbChirp, err := cfg.db.GetChirp(r.Context(), id)
+	if dbChirp.UserID != userID {
+		log.Printf("User attempting to delet a Chirp not their own")
+		w.WriteHeader(403)
+		return
+
+	}
+	err = cfg.db.DeleteChirp(r.Context(), dbChirp.ID)
+	if err != nil {
+		log.Printf("Error deleting chirp id:%s", err)
+		w.WriteHeader(404)
+		return
+	}
+	w.WriteHeader(204)
+}
 
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	secret := os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		panic(err)
 	}
 	dbQueries := database.New(db)
-	c := apiConfig{fileserverHits: atomic.Int32{}, db: dbQueries, platform: platform}
+	c := apiConfig{fileserverHits: atomic.Int32{}, db: dbQueries, platform: platform, secret: secret}
 	m := http.NewServeMux()
 
 	m.Handle("/app/", c.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
@@ -294,8 +482,12 @@ func main() {
 	m.HandleFunc("POST /api/chirps", c.Chirp)
 	m.HandleFunc("GET /api/chirps", c.GetChirps)
 	m.HandleFunc("GET /api/chirps/{chirpID}", c.GetChirp)
+	m.HandleFunc("DELETE /api/chirps/{chirpID}", c.DeletChirp)
 	m.HandleFunc("POST /api/users", c.createUser)
 	m.HandleFunc("POST /api/login", c.Login)
+	m.HandleFunc("POST /api/refresh", c.Refresh)
+	m.HandleFunc("POST /api/revoke", c.Revoke)
+	m.HandleFunc("PUT /api/users", c.UpdateEmail)
 	s := http.Server{Handler: m, Addr: ":8080"}
 
 	s.ListenAndServe()

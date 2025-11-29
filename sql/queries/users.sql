@@ -7,3 +7,7 @@ RETURNING *;
 
 -- name: GetUserWithEmail :one
 SELECT * FROM users where email = $1;
+
+-- name: UpdateUserEmail :exec
+UPDATE users SET email = $2, hash_password = $3, updated_at = Now() where id = $1;
+
