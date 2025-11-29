@@ -20,6 +20,7 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 	secret         string
+	polkaKey       string
 }
 type apiChirpResp struct {
 	Id        uuid.UUID `json:"id"`
@@ -43,6 +44,7 @@ type User struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsRed        bool      `json:"is_chirpy_red"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -85,12 +87,13 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	secret := os.Getenv("SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		panic(err)
 	}
 	dbQueries := database.New(db)
-	c := apiConfig{fileserverHits: atomic.Int32{}, db: dbQueries, platform: platform, secret: secret}
+	c := apiConfig{fileserverHits: atomic.Int32{}, db: dbQueries, platform: platform, secret: secret, polkaKey: polkaKey}
 	m := http.NewServeMux()
 
 	m.Handle("/app/", c.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
@@ -108,6 +111,8 @@ func main() {
 	m.HandleFunc("POST /api/refresh", c.Refresh)
 	m.HandleFunc("POST /api/revoke", c.Revoke)
 	m.HandleFunc("PUT /api/users", c.UpdateEmail)
+
+	m.HandleFunc("POST /api/polka/webhooks", c.UpgradeUser)
 
 	s := http.Server{Handler: m, Addr: ":8080"}
 

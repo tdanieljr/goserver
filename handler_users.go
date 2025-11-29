@@ -59,6 +59,7 @@ func (cfg *apiConfig) UpdateEmail(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: dbUser.CreatedAt,
 		UpdatedAt: dbUser.UpdatedAt,
 		Email:     dbUser.Email,
+		IsRed:     dbUser.IsChirpyRed,
 	}
 	resp, err := json.Marshal(apiUser)
 	if err != nil {
@@ -99,6 +100,7 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		IsRed:     user.IsChirpyRed,
 	}
 
 	dat, err := json.Marshal(apiUser)

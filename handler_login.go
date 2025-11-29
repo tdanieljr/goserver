@@ -66,6 +66,7 @@ func (cfg *apiConfig) Login(w http.ResponseWriter, r *http.Request) {
 		Email:        dbUser.Email,
 		Token:        t,
 		RefreshToken: rt,
+		IsRed:        dbUser.IsChirpyRed,
 	}
 	resp, err := json.Marshal(apiUser)
 	if err != nil {

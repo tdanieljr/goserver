@@ -16,7 +16,7 @@ INSERT INTO users (id, created_at, updated_at, email, hash_password)
 VALUES (
     gen_random_uuid(),Now(),Now(), $1, $2
 )
-RETURNING id, created_at, updated_at, email, hash_password
+RETURNING id, created_at, updated_at, email, hash_password, is_chirpy_red
 `
 
 type CreateUserParams struct {
@@ -33,12 +33,13 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
 
 const getUserWithEmail = `-- name: GetUserWithEmail :one
-SELECT id, created_at, updated_at, email, hash_password FROM users where email = $1
+SELECT id, created_at, updated_at, email, hash_password, is_chirpy_red FROM users where email = $1
 `
 
 func (q *Queries) GetUserWithEmail(ctx context.Context, email string) (User, error) {
@@ -50,8 +51,18 @@ func (q *Queries) GetUserWithEmail(ctx context.Context, email string) (User, err
 		&i.UpdatedAt,
 		&i.Email,
 		&i.HashPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
+}
+
+const setUserRed = `-- name: SetUserRed :exec
+UPDATE users SET is_chirpy_red = true, updated_at = Now() where id = $1
+`
+
+func (q *Queries) SetUserRed(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, setUserRed, id)
+	return err
 }
 
 const updateUserEmail = `-- name: UpdateUserEmail :exec

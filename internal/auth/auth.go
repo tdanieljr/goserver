@@ -81,3 +81,22 @@ func MakeRefreshToken() (string, error) {
 	s := hex.EncodeToString(b)
 	return s, nil
 }
+func GetAPIKey(headers http.Header) (string, error) {
+	authHeader := headers.Get("Authorization")
+	fmt.Printf("%v\n", authHeader)
+	if authHeader == "" {
+		return "", fmt.Errorf("no auth header")
+	}
+	if !strings.HasPrefix(authHeader, "ApiKey") {
+		return "", fmt.Errorf("Wrong Prefix")
+
+	}
+	authList := strings.Fields(authHeader)
+	if len(authList) != 2 {
+		return "", fmt.Errorf("Not enough fields")
+
+	}
+	authToken := strings.TrimSpace(authList[1])
+	return authToken, nil
+
+}
